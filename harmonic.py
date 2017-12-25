@@ -7,7 +7,7 @@ from sklearn.linear_model import LinearRegression
 
 
 class Harmonic:
-    def __init__(self, freq=1, num_freqs=1, refine_fundamental=True):
+    def __init__(self, freq=1, num_freqs=1, refine_fundamental=False):
         """
         A class for fitting and manipulating harmonic series
         :param freq:  The fundamental frequency of the series.  If do_freq_fit is positive,
@@ -56,6 +56,14 @@ class Harmonic:
         self._f0 = w / (2 * np.pi)
 
     @property
+    def period(self):
+        return 1. / self.f0
+
+    @period.setter
+    def period(self, period_val):
+        self.f0 = 1. / period_val
+
+    @property
     def w_array(self):
         """
         :return: An array of angular frequencies used.
@@ -69,11 +77,15 @@ class Harmonic:
         """
         return np.array([n * self.f0 for n in range(1, self.num_freqs + 1)])
 
+
+    def clone(self):
+        return copy.deepcopy(self)
+
     def derivative(self):
         """
         :return: A new Harmonic object that is the derivative of this one
         """
-        h = copy.deepcopy(self)
+        h = self.clone()
         h.cosines = self.w_array * self.sines
         h.sines = - self.w_array * self.cosines
         return h
