@@ -2,58 +2,98 @@ import copy
 import numpy as np
 import pandas as pd
 from scipy.optimize import  basinhopping
-from easier import ParamState, shade, Item
-from sklearn.linear_model import LinearRegression, RidgeCV, LassoCV, Ridge
+from easier import ParamState
+from sklearn.linear_model import LinearRegression
 
 
 class Harmonic:
-    def __init__(self, freq=1, num_freqs=1, do_freq_fit=True):
+    def __init__(self, freq=1, num_freqs=1, refine_fundamental=True):
+        """
+        A class for fitting and manipulating harmonic series
+        :param freq:  The fundamental frequency of the series.  If do_freq_fit is positive,
+                      this is used as a guess to identify the actual fundamental.
+        :param num_freqs:  The number of frequencies to include in the series
+        :param do_freq_fit:  If set to True, will try to refine the fundamental estimate
+        """
         self.num_freqs = num_freqs
         self.init_freq = freq
-        self._do_freq_fit = do_freq_fit
+        self._refine_fundamental = refine_fundamental
         self.sines = np.ones((num_freqs, 1))
         self.cosines = np.ones((num_freqs, 1))
         self.f0 = freq
 
     @property
     def f0(self):
+        """
+        :return: The fundamental frequency
+        """
         return self._f0
 
     @f0.setter
     def f0(self, f):
+        """
+        Set the fundamental frequency
+        :param f: The frequency to set
+        """
         self._f0 = f
         self._w0 = 2 * np.pi * f
 
     @property
     def w0(self):
+        """
+        :return: The fundamental frequency in angular units
+        """
         return self._w0
 
     @w0.setter
     def w0(self, w):
+        """
+        Set the angular frequency
+        :param w:  the frequency to set
+        :return:
+        """
         self._w0 = w
         self._f0 = w / (2 * np.pi)
 
     @property
     def w_array(self):
+        """
+        :return: An array of angular frequencies used.
+        """
         return np.array([n * self.w0 for n in range(1, self.num_freqs + 1)])
 
     @property
     def f_array(self):
+        """
+        :return: An array of frequencies used
+        """
         return np.array([n * self.f0 for n in range(1, self.num_freqs + 1)])
 
     def derivative(self):
+        """
+        :return: A new Harmonic object that is the derivative of this one
+        """
         h = copy.deepcopy(self)
         h.cosines = self.w_array * self.sines
         h.sines = - self.w_array * self.cosines
         return h
 
     def integral(self):
+        """
+        :return: A new Harmonic object that is the integral of this one
+        """
         h = copy.deepcopy(self)
         h.cosines = - self.sines / self.w_array
         h.sines = self.cosines / self.w_array
         return h
 
-    def _fit_freq(self, time, amplitude):
+    def refine_frequency(self, time, amplitude):
+        """
+        A method for refining the fundamental frequency of this harmonic
+        :param time:  An array of timestamps
+        :param amplitude:  An array of amplitudes ideally from a single tone signal
+        :return:
+        """
         p = ParamState(
             't',
             'y_true',
@@ -83,6 +123,9 @@ class Harmonic:
         self.f0 = p.f
 
     def _get_bases(self, time):
+        """
+        Creates basis functions for fitting
+        """
         if not isinstance(time, np.ndarray):
             time = np.array(time)
         df_cos = pd.DataFrame(index=range(len(time)))
@@ -96,6 +139,12 @@ class Harmonic:
         return np.append(sin_bases, cos_bases, axis=1)
 
     def _fit_params(self, times, values):
+        """
+        Regresses a timeseries against the basis functions
+        :param times:
+        :param values:
+        :return:
+        """
         basis = self._get_bases(times)
 
         # in case you want to do ridge regression
@@ -111,11 +160,23 @@ class Harmonic:
         return model.coef_
 
     def fit(self, times, values):
-        if self._do_freq_fit:
-            self._fit_freq(times, amplitude)
+        """
+        Fit a time series with the harmonic series
+        :param times: An array of timestamps
+        :param values:  An array of signal amplitudes
+        :return:
+        """
+        values = values - np.mean(values)
+        if self._refine_fundamental:
+            self.refine_frequency(times, values)
         self._fit_params(times, values)
 
     def predict(self, t):
+        """
+        Use the harmonic information to predict (generate fit values) for timestamps
+        :param t:
+        :return:
+        """
         # use mat mult to get args to trig funcs
         phi = np.matrix(t).T * np.matrix(self.w_array)
 
