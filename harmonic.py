@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import  basinhopping
 from easier import ParamState
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, LassoCV
 
 
 class Harmonic:
@@ -81,7 +81,13 @@ class Harmonic:
     def clone(self):
         return copy.deepcopy(self)
 
-    def derivative(self):
+    def derivative(self, order=1):
+        h = self.clone()
+        for nn in range(order):
+            h = h._derivative()
+        return h
+
+    def _derivative(self):
         """
         :return: A new Harmonic object that is the derivative of this one
         """
@@ -90,7 +96,13 @@ class Harmonic:
         h.sines = - self.w_array * self.cosines
         return h
 
-    def integral(self):
+    def integral(self, order=1):
+        h = self.clone()
+        for nn in range(order):
+            h = h._integral()
+        return h
+
+    def _integral(self):
         """
         :return: A new Harmonic object that is the integral of this one
         """
@@ -150,7 +162,7 @@ class Harmonic:
         sin_bases, cos_bases = df_sin.values, df_cos.values
         return np.append(sin_bases, cos_bases, axis=1)
 
-    def _fit_params(self, times, values):
+    def _fit_params(self, times, values, alpha=None):
         """
         Regresses a timeseries against the basis functions
         :param times:
@@ -159,19 +171,25 @@ class Harmonic:
         """
         basis = self._get_bases(times)
 
-        # in case you want to do ridge regression
-        # alpha = .000002
-        # model_res = Ridge(alpha=alpha)
+        if alpha is None:
+            model = LinearRegression()
+        else:
+            print('running ridge')
+            # model = Ridge(alpha=alpha)
+            model = Lasso(alpha=alpha)
+            # model = LassoCV()
 
-        # in case you want to do just linear regression
-        model = LinearRegression()
+        # # in case you want to do just linear regression
+        # model = LinearRegression()
 
         model.fit(basis, values)
         self.sines = model.coef_[:self.num_freqs]
         self.cosines = model.coef_[self.num_freqs:]
+        print(f'model {model}')
+        print(f'coeff = {model.coef_}')
         return model.coef_
 
-    def fit(self, times, values):
+    def fit(self, times, values, alpha=None):
         """
         Fit a time series with the harmonic series
         :param times: An array of timestamps
@@ -181,7 +199,7 @@ class Harmonic:
         values = values - np.mean(values)
         if self._refine_fundamental:
             self.refine_frequency(times, values)
-        self._fit_params(times, values)
+        self._fit_params(times, values, alpha=alpha)
 
     def predict(self, t):
         """
@@ -205,4 +223,7 @@ class Harmonic:
         prediction += np.sum(sine_terms, axis=1)
 
         # return squeezed prediction
-        return np.squeeze(prediction)
+        out = np.squeeze(prediction)
+        if not out.shape:
+            out = float(out)
+        return out
