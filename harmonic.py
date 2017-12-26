@@ -1,13 +1,13 @@
 import copy
 import numpy as np
 import pandas as pd
-from scipy.optimize import  basinhopping
+from scipy.optimize import  basinhopping, fmin
 from easier import ParamState
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, LassoCV
 
 
 class Harmonic:
-    def __init__(self, freq=1, num_freqs=1, refine_fundamental=False):
+    def __init__(self, freq=1, num_freqs=1):
         """
         A class for fitting and manipulating harmonic series
         :param freq:  The fundamental frequency of the series.  If do_freq_fit is positive,
@@ -17,10 +17,10 @@ class Harmonic:
         """
         self.num_freqs = num_freqs
         self.init_freq = freq
-        self._refine_fundamental = refine_fundamental
         self.sines = np.ones((num_freqs, 1))
         self.cosines = np.ones((num_freqs, 1))
         self.f0 = freq
+
 
     @property
     def f0(self):
@@ -77,6 +77,33 @@ class Harmonic:
         """
         return np.array([n * self.f0 for n in range(1, self.num_freqs + 1)])
 
+    def _ensure_same(self, other):
+        if len(self.sines) != len(other.sines):
+            raise ValueError('You can only place operators between objects of same dimensions')
+
+        if self.f0 != other.f0:
+            raise ValueError('You can only place operators between objects with same fundamental freq')
+
+    def __add__(self, other):
+        self._ensure_same(other)
+        h = self.clone()
+        h.cosines = self.cosines + other.cosines
+        h.sines = self.sines + other.sines
+        return h
+
+    def __sub__(self, other):
+        self._ensure_same(other)
+        h = self.clone()
+        h.cosines = self.cosines - other.cosines
+        h.sines = self.sines - other.sines
+        return h
+
+    def __neg__(self):
+        h = self.clone()
+        h.cosines = -self.cosines
+        h.sines = -self.sines
+        return h
+
 
     def clone(self):
         return copy.deepcopy(self)
@@ -111,7 +138,7 @@ class Harmonic:
         h.sines = self.cosines / self.w_array
         return h
 
-    def refine_frequency(self, time, amplitude):
+    def refine_frequency(self, time, amplitude, simple=False, verbose=False):
         """
         A method for refining the fundamental frequency of this harmonic
         :param time:  An array of timestamps
@@ -140,11 +167,16 @@ class Harmonic:
             return energy
 
         x0 = p.array
-        xf = basinhopping(cost, x0, minimizer_kwargs=dict(args=(p,))).x
+        if simple:
+            xf = fmin(cost, x0, args=(p,), disp=verbose)
+        else:
+            xf = basinhopping(cost, x0, minimizer_kwargs=dict(args=(p,), disp=verbose)).x
         p.ingest(xf)
         if (p.f - self.f0) > 3 ** 2:
             raise ValueError(f'Guess freq: {self.f0}, Fit Freq: {p.f}  too far apart')
         self.f0 = p.f
+
+        return self
 
     def _get_bases(self, time):
         """
@@ -162,34 +194,36 @@ class Harmonic:
         sin_bases, cos_bases = df_sin.values, df_cos.values
         return np.append(sin_bases, cos_bases, axis=1)
 
-    def _fit_params(self, times, values, alpha=None):
+    def _fit_params(self, times, values, alpha=None, method='regression'):
         """
         Regresses a timeseries against the basis functions
-        :param times:
-        :param values:
-        :return:
+        :param times: times to fit
+        :param values:  values to fit
+        :param alpha:  alpha for ridge or lasso regressors
+        :param method: the regression method to use
+        :return:  An array of coefficients
         """
+        method_dict = {
+            'regression': (LinearRegression, dict()),
+            'ridge': (Ridge, dict(alpha=alpha)),
+            'lasso': (Lasso, dict(alpha=alpha)),
+            'lassocv': (LassoCV, dict())
+        }
+        if method not in method_dict.keys():
+            raise ValueError(f'Method must be one of {list(method_dict.keys())}')
+
         basis = self._get_bases(times)
 
-        if alpha is None:
-            model = LinearRegression()
-        else:
-            print('running ridge')
-            # model = Ridge(alpha=alpha)
-            model = Lasso(alpha=alpha)
-            # model = LassoCV()
+        model_class, kwargs = method_dict[method]
+        model = model_class(**kwargs)
 
-        # # in case you want to do just linear regression
-        # model = LinearRegression()
 
         model.fit(basis, values)
         self.sines = model.coef_[:self.num_freqs]
         self.cosines = model.coef_[self.num_freqs:]
-        print(f'model {model}')
-        print(f'coeff = {model.coef_}')
         return model.coef_
 
-    def fit(self, times, values, alpha=None):
+    def fit(self, times, values, alpha=None, method='regression'):
         """
         Fit a time series with the harmonic series
         :param times: An array of timestamps
@@ -197,9 +231,8 @@ class Harmonic:
         :return:
         """
         values = values - np.mean(values)
-        if self._refine_fundamental:
-            self.refine_frequency(times, values)
-        self._fit_params(times, values, alpha=alpha)
+        self._fit_params(times, values, alpha=alpha, method=method)
+        return self
 
     def predict(self, t):
         """
