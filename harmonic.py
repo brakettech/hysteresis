@@ -1,27 +1,65 @@
 import copy
 import numpy as np
 import pandas as pd
-from scipy.optimize import  basinhopping, fmin, fmin_powell
+from scipy.optimize import fmin_powell
 from easier import ParamState
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, LassoCV
-from pandashells.lib.lomb_scargle_lib import lomb_scargle
+from scipy.fftpack import fft
 
 
 class Harmonic:
-    def __init__(self, freq=1, num_freqs=1):
-        """
-        A class for fitting and manipulating harmonic series
-        :param freq:  The fundamental frequency of the series.  If do_freq_fit is positive,
-                      this is used as a guess to identify the actual fundamental.
-        :param num_freqs:  The number of frequencies to include in the series
-        :param do_freq_fit:  If set to True, will try to refine the fundamental estimate
-        """
-        self.num_freqs = num_freqs
-        self.init_freq = freq
-        self.sines = np.ones((num_freqs, 1))
-        self.cosines = np.ones((num_freqs, 1))
-        self.f0 = freq
+    def __init__(self, harmonics=None):
+        if harmonics is None:
+            harmonics = [1]
+        self.harmonics = np.array(harmonics)
+        num_freqs = len(harmonics)
+        self._sines = np.ones((num_freqs, 1))
+        self._cosines = np.ones((num_freqs, 1))
+        self._z = np.ones((num_freqs, 1))
+        self.f0 = 1
+        self.intercept = 0
 
+    @property
+    def sines(self):
+        return self._sines
+
+    @sines.setter
+    def sines(self, new):
+        self._sines = new
+        self._z  = self.cosines + 1j * self.sines
+
+    @property
+    def cosines(self):
+        return self._cosines
+
+    @cosines.setter
+    def cosines(self, new):
+        self._cosines = new
+        self._z  = self.cosines + 1j * self.sines
+
+    @property
+    def z(self):
+        return self._z
+        # return self.cosines + 1j * self.sines
+
+    @z.setter
+    def z(self, new):
+        self._z = new
+        self._cosines = np.real(new)
+        self._sines = np.imag(new)
+
+    @property
+    def amplitudes(self):
+        return np.sqrt(self.sines ** 2 + self.cosines ** 2)
+
+    @property
+    def phases(self):
+        return np.arctan2(self.sines, self.cosines)
+
+
+    @property
+    def num_freqs(self):
+        return len(self.harmonics)
 
     @property
     def f0(self):
@@ -65,18 +103,83 @@ class Harmonic:
         self.f0 = 1. / period_val
 
     @property
-    def w_array(self):
+    def w(self):
         """
         :return: An array of angular frequencies used.
         """
-        return np.array([n * self.w0 for n in range(1, self.num_freqs + 1)])
+        return np.array([n * self.w0 for n in self.harmonics])
 
     @property
-    def f_array(self):
+    def f(self):
         """
         :return: An array of frequencies used
         """
-        return np.array([n * self.f0 for n in range(1, self.num_freqs + 1)])
+        return np.array([n * self.f0 for n in self.harmonics])
+
+    def _get_padded_length(self, initial_length, interp_exp=0):
+        for nn in range(int(1e6)):
+            padded_length = 2 ** nn
+            if padded_length >= initial_length:
+                break
+        return padded_length * 2 ** interp_exp
+
+    def get_freq(self, time, amplitude, interp_exp=3):
+        # demean the signal
+        amplitude = amplitude - np.mean(amplitude)
+
+        # pad length to power of two with maybe some interpolation
+        padded_length = self._get_padded_length(len(amplitude), interp_exp=interp_exp)
+
+        # get the sample time
+        dt = np.median(np.diff(time))
+
+        # compute the fft
+        z = fft(amplitude, n=padded_length)
+
+        # define a slice for postive frequencies
+        ind = slice(0, int((len(z) / 2)))
+
+        # get positive amplitudes
+        amp_f = np.abs(z)[ind]
+
+        # compute positive freqs
+        f = np.fft.fftfreq(len(z), d=dt)[ind]
+
+        # return the max freq
+        return f[np.where(amp_f == np.max(amp_f))[0]][0]
+
+    def refine_frequency(self, time, amplitude, guess, verbose=False):
+        # set up to do do a mininzer fit to best freq
+        p = ParamState(
+            't',
+            'y_true',
+            a=1,
+            b=1,
+            f=guess,
+        )
+        p.given(
+            t=time,
+            y_true=amplitude
+        )
+
+        def model(p):
+            return (
+                p.a * np.sin(2 * np.pi * p.f * p.t) +
+                p.b * np.cos(2 * np.pi * p.f * p.t)
+            )
+
+        def cost(args, p):
+            p.ingest(args)
+            err = model(p) - p.y_true
+            energy = np.sum(err ** 2)
+            return energy
+
+        x0 = p.array
+        xf = fmin_powell(cost, x0, args=(p,), disp=verbose)
+        p.ingest(xf)
+        if (p.f - guess) > 3 ** 2:
+            raise ValueError(f'Guess freq: {self.f0}, Fit Freq: {p.f}  too far apart')
+        return p.f
 
     def _ensure_same(self, other):
         if len(self.sines) != len(other.sines):
@@ -105,6 +208,18 @@ class Harmonic:
         h.sines = -self.sines
         return h
 
+    def __div__(self, other):
+        h = self.clone()
+        h.z = self.z / other.z
+        return h
+
+    def __truediv__(self, other):
+        return self.__div__(other)
+
+    def __mul__(self, other):
+        h = self.clone()
+        h.z = self.z * other.z
+        return h
 
     def clone(self):
         return copy.deepcopy(self)
@@ -120,8 +235,8 @@ class Harmonic:
         :return: A new Harmonic object that is the derivative of this one
         """
         h = self.clone()
-        h.cosines = self.w_array * self.sines
-        h.sines = - self.w_array * self.cosines
+        h.cosines = self.w * self.sines
+        h.sines = - self.w * self.cosines
         return h
 
     def integral(self, order=1):
@@ -135,93 +250,9 @@ class Harmonic:
         :return: A new Harmonic object that is the integral of this one
         """
         h = copy.deepcopy(self)
-        h.cosines = - self.sines / self.w_array
-        h.sines = self.cosines / self.w_array
+        h.cosines = - self.sines / self.w
+        h.sines = self.cosines / self.w
         return h
-
-    def refine_frequency(self, time, amplitude, simple=False, verbose=False):
-        # use lomb-scargle to get initial guess
-        dfd = pd.DataFrame(dict(t=time, amp=amplitude))
-        dfs = lomb_scargle(dfd, 't', 'amp', interp_exponent=1)
-        freq = dfs[dfs.power == dfs.power.max()].freq
-
-        # set up to do do a mininzer fit to best freq
-        p = ParamState(
-            't',
-            'y_true',
-            a=1,
-            b=1,
-            f=self.f0,
-        )
-        p.given(
-            t=time,
-            y_true=amplitude
-        )
-
-        def model(p):
-            return (
-                p.a * np.sin(2 * np.pi * p.f * p.t) +
-                p.b * np.cos(2 * np.pi * p.f * p.t)
-            )
-
-        def cost(args, p):
-            p.ingest(args)
-            err = model(p) - p.y_true
-            energy = np.sum(err ** 2)
-            return energy
-
-        x0 = p.array
-        xf = fmin_powell(cost, x0, args=(p,), disp=verbose)
-        p.ingest(xf)
-        if (p.f - self.f0) > 3 ** 2:
-            raise ValueError(f'Guess freq: {self.f0}, Fit Freq: {p.f}  too far apart')
-        self.f0 = p.f
-
-        return self
-
-
-
-
-
-    def refine_frequency_orig(self, time, amplitude, simple=False, verbose=False):
-        """
-        A method for refining the fundamental frequency of this harmonic
-        :param time:  An array of timestamps
-        :param amplitude:  An array of amplitudes ideally from a single tone signal
-        :return:
-        """
-        p = ParamState(
-            't',
-            'y_true',
-            a=1,
-            f=self.f0,
-            phi=0
-        )
-        p.given(
-            t=time,
-            y_true=amplitude
-        )
-
-        def model(p):
-            return p.a * np.sin(2 * np.pi * p.f * p.t + p.phi)
-
-        def cost(args, p):
-            p.ingest(args)
-            err = model(p) - p.y_true
-            energy = np.sum(err ** 2)
-            return energy
-
-        x0 = p.array
-        if simple:
-            xf = fmin(cost, x0, args=(p,), disp=verbose)
-        else:
-            xf = basinhopping(cost, x0, minimizer_kwargs=dict(args=(p,))).x
-        p.ingest(xf)
-        if (p.f - self.f0) > 3 ** 2:
-            raise ValueError(f'Guess freq: {self.f0}, Fit Freq: {p.f}  too far apart')
-        self.f0 = p.f
-
-        return self
 
     def _get_bases(self, time):
         """
@@ -232,7 +263,7 @@ class Harmonic:
         df_cos = pd.DataFrame(index=range(len(time)))
         df_sin = pd.DataFrame(index=range(len(time)))
 
-        for n, w in enumerate(self.w_array):
+        for n, w in enumerate(self.w):
             df_sin.loc[:, n] = np.sin(w * time)
             df_cos.loc[:, n] = np.cos(w * time)
 
@@ -248,6 +279,9 @@ class Harmonic:
         :param method: the regression method to use
         :return:  An array of coefficients
         """
+        guess = self.get_freq(times, values, interp_exp=3)
+        self.f0 = self.refine_frequency(times, values, guess, verbose=False)
+
         method_dict = {
             'regression': (LinearRegression, dict()),
             'ridge': (Ridge, dict(alpha=alpha)),
@@ -262,7 +296,6 @@ class Harmonic:
         model_class, kwargs = method_dict[method]
         model = model_class(**kwargs)
 
-
         model.fit(basis, values)
         self.sines = model.coef_[:self.num_freqs]
         self.cosines = model.coef_[self.num_freqs:]
@@ -275,7 +308,8 @@ class Harmonic:
         :param values:  An array of signal amplitudes
         :return:
         """
-        values = values - np.mean(values)
+        self.intercept = np.mean(values)
+        values = values - self.intercept
         self._fit_params(times, values, alpha=alpha, method=method)
         return self
 
@@ -286,7 +320,7 @@ class Harmonic:
         :return:
         """
         # use mat mult to get args to trig funcs
-        phi = np.matrix(t).T * np.matrix(self.w_array)
+        phi = np.matrix(t).T * np.matrix(self.w)
 
         # use mat mult to multiply by coeffs
         cosine_terms = np.cos(phi) * np.matrix(self.cosines).T
@@ -301,7 +335,7 @@ class Harmonic:
         prediction += np.sum(sine_terms, axis=1)
 
         # return squeezed prediction
-        out = np.squeeze(prediction)
+        out = np.squeeze(prediction) + self.intercept
         if not out.shape:
             out = float(out)
         return out

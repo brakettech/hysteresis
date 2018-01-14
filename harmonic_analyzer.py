@@ -64,8 +64,6 @@ class HarmonicAnalyzer:
         params = self.params
 
         df = self.load(file_name)
-        print()
-        print(df.head().to_string())
 
         # refine the guess of the fundamental frequency
         h = Harmonic(freq=fundamental_freq, num_freqs=1)
