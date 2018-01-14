@@ -13,6 +13,15 @@ class HarmonicAnalyzer:
         self.df_fit = None
         self.file_name = None
         self.delta = None
+        self.channel_mapper = dict(
+            a='sig_gen',
+            b='res_volt',
+            c='sec_volt',
+        )
+
+    def set_channel_names(self, **kwargs):
+        self.channel_mapper.update(kwargs)
+        return self
 
     def normalizer(self, y, scale=None, return_scale=False):
         if scale is None:
@@ -39,13 +48,24 @@ class HarmonicAnalyzer:
         delta = zero2 - zero1
         return delta
 
+    def load(self, file_name):
+        # load the file and make sure all data has zero-mean
+        kwargs = dict(
+            max_sample_freq=self.params.max_sample_freq
+        )
+        kwargs.update(self.channel_mapper)
+        df = CSV(file_name, **kwargs).df
+        df = self.demeaner(df)
+        self.df_data = df
+        return df
+
     def _get_fit_frames(self, file_name, fundamental_freq):
         # make a local reference to the params
         params = self.params
 
-        # load the file and make sure all data has zero-mean
-        df = CSV(file_name, a='sig_gen', b='res_volt', c='sec_volt', max_sample_freq=params.max_sample_freq).df
-        df = self.demeaner(df)
+        df = self.load(file_name)
+        print()
+        print(df.head().to_string())
 
         # refine the guess of the fundamental frequency
         h = Harmonic(freq=fundamental_freq, num_freqs=1)

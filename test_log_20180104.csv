@@ -1,4 +1,4 @@
-pipe,excitor position,separation,freq,ch_a,ch_b,ch_c,file
+pipe,excitor_position,separation,freq,a,b,c,file
 virgin,0,1,100,300.4,26.11,1318,20180104-0001.csv
 virgin,0,1,50,197.9,27.48,976.1,20180104-0002.csv
 virgin,0,1,20,100.4,28.38,488.2,20180104-0003.csv

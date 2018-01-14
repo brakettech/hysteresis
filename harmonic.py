@@ -1,9 +1,10 @@
 import copy
 import numpy as np
 import pandas as pd
-from scipy.optimize import  basinhopping, fmin
+from scipy.optimize import  basinhopping, fmin, fmin_powell
 from easier import ParamState
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, LassoCV
+from pandashells.lib.lomb_scargle_lib import lomb_scargle
 
 
 class Harmonic:
@@ -139,6 +140,50 @@ class Harmonic:
         return h
 
     def refine_frequency(self, time, amplitude, simple=False, verbose=False):
+        # use lomb-scargle to get initial guess
+        dfd = pd.DataFrame(dict(t=time, amp=amplitude))
+        dfs = lomb_scargle(dfd, 't', 'amp', interp_exponent=1)
+        freq = dfs[dfs.power == dfs.power.max()].freq
+
+        # set up to do do a mininzer fit to best freq
+        p = ParamState(
+            't',
+            'y_true',
+            a=1,
+            b=1,
+            f=self.f0,
+        )
+        p.given(
+            t=time,
+            y_true=amplitude
+        )
+
+        def model(p):
+            return (
+                p.a * np.sin(2 * np.pi * p.f * p.t) +
+                p.b * np.cos(2 * np.pi * p.f * p.t)
+            )
+
+        def cost(args, p):
+            p.ingest(args)
+            err = model(p) - p.y_true
+            energy = np.sum(err ** 2)
+            return energy
+
+        x0 = p.array
+        xf = fmin_powell(cost, x0, args=(p,), disp=verbose)
+        p.ingest(xf)
+        if (p.f - self.f0) > 3 ** 2:
+            raise ValueError(f'Guess freq: {self.f0}, Fit Freq: {p.f}  too far apart')
+        self.f0 = p.f
+
+        return self
+
+
+
+
+
+    def refine_frequency_orig(self, time, amplitude, simple=False, verbose=False):
         """
         A method for refining the fundamental frequency of this harmonic
         :param time:  An array of timestamps
@@ -170,7 +215,7 @@ class Harmonic:
         if simple:
             xf = fmin(cost, x0, args=(p,), disp=verbose)
         else:
-            xf = basinhopping(cost, x0, minimizer_kwargs=dict(args=(p,), disp=verbose)).x
+            xf = basinhopping(cost, x0, minimizer_kwargs=dict(args=(p,))).x
         p.ingest(xf)
         if (p.f - self.f0) > 3 ** 2:
             raise ValueError(f'Guess freq: {self.f0}, Fit Freq: {p.f}  too far apart')
