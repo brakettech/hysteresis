@@ -9,7 +9,7 @@ import textwrap
 
 
 class Pipe:
-    def __init__(self, pipe, df_log_for_pipe, data_dir=None, n_jobs=1, verbose=True):
+    def __init__(self, pipe, df_log_for_pipe, channel_mapper, data_dir=None, n_jobs=1, verbose=True, harmonic=3):
         """
         Initialize processor with a dataframe containing the batch
         of files that belong to one pipe.
@@ -21,8 +21,9 @@ class Pipe:
         data_dir = path_to_csv_data_files (defaults to "./")
         n_jobs = the number of jobs to run in parallel
         """
+        self.channel_mapper = channel_mapper
         self.n_jobs = n_jobs
-        self.harmonics = [1, 3]
+        self.harmonics = [1, harmonic]
         self.pipe = pipe
         self.data_dir = data_dir
         self.verbose = verbose
@@ -62,7 +63,7 @@ class Pipe:
         if self.verbose:
             print(f'Processing {self.pipe}, {pos}, {file_name}')
 
-        df = CSV(file_name=file_name, max_sample_freq=1e9, **channel_mapper).df
+        df = CSV(file_name=file_name, max_sample_freq=1e9, **self.channel_mapper).df
 
         # In everything below the h_ prefix stands for "harmonic" because the
         # variable contains an instance of a harmonic object.
