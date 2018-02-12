@@ -71,6 +71,7 @@ class Pipe:
         # fit the primary current
         h_i_prim = Harmonic(harmonics=self.harmonics)
         h_i_prim.fit(df.t, df.res_volt)
+        h_i_prim = h_i_prim.derivative()
 
         # fit the secondary voltage
         h_v_sec = Harmonic(harmonics=self.harmonics)
