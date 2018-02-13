@@ -1,12 +1,12 @@
 from daq.pico import CSV
 from dask import compute, delayed
 from harmonic import Harmonic
+from scipy import signal
 import dask.multiprocessing
 import numpy as np
 import os
 import pandas as pd
 import textwrap
-
 
 class Pipe:
     def __init__(self, pipe, df_log_for_pipe, channel_mapper, data_dir=None, n_jobs=1, verbose=True, harmonic=3):
@@ -59,11 +59,20 @@ class Pipe:
             """
         )
 
+    def filter(self, df):
+        filter_cols = ['res_volt', 'sec_volt', 'rec_volt']
+        for col in filter_cols:
+            # 8 pol filter at .01 of nyquist
+            b, a = signal.butter(8, 0.01)
+            df.loc[:, col] = signal.filtfilt(b, a, df[col].values, padlen=150)
+        return df
+
     def _process_file(self, pos, file_name):
         if self.verbose:
             print(f'Processing {self.pipe}, {pos}, {file_name}')
 
         df = CSV(file_name=file_name, max_sample_freq=1e9, **self.channel_mapper).df
+        df = self.filter(df)
 
         # In everything below the h_ prefix stands for "harmonic" because the
         # variable contains an instance of a harmonic object.
