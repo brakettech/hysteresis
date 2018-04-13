@@ -1,0 +1,13 @@
+rfec/20180118/
+rfec/20180209/
+rfec/20180211/
+rfec/20180312/
+rfec/20180318/
+data_20171220/
+data_20180108/
+*.pdf
+*.png
+__pycache__/
+trash
+.idea
+

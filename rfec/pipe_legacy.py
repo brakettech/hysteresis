@@ -9,7 +9,7 @@ import pandas as pd
 import textwrap
 
 class Pipe:
-    def __init__(self, df_log_batch, channel_mapper, n_jobs=1, verbose=True, harmonic=3):
+    def __init__(self, pipe, df_log_for_pipe, channel_mapper, data_dir=None, n_jobs=1, verbose=True, harmonic=3):
         """
         Initialize processor with a dataframe containing the batch
         of files that belong to one pipe.
@@ -24,9 +24,12 @@ class Pipe:
         self.channel_mapper = channel_mapper
         self.n_jobs = n_jobs
         self.harmonics = [1, harmonic]
+        self.pipe = pipe
+        self.data_dir = data_dir
         self.verbose = verbose
 
-        self.df_log = df_log_batch
+        fields = ['pos', 'file_name']
+        self.df_log = df_log_for_pipe[fields].sort_values(by=fields)
         self._df = None
 
     @property
@@ -43,10 +46,7 @@ class Pipe:
             """
             Column descriptions for result dataframe.
 
-            'key1': first key field
-            'key2': second key field
-            "key*': * key field
-            "....': ....
+            'pipe': any python object used to uniquely identify a pipe (usually a string or a number)
             'pos': the position of a given measurement
             'prim_sec_amp': amplitude of V_secondary / I_primary
             'prim_sec_phi': phase of V_secondary / I_primary
@@ -67,9 +67,9 @@ class Pipe:
             df.loc[:, col] = signal.filtfilt(b, a, df[col].values, padlen=150)
         return df
 
-    def _process_file(self, file_name, key_dict):
+    def _process_file(self, pos, file_name):
         if self.verbose:
-            print(f'Processing {file_name}')
+            print(f'Processing {self.pipe}, {pos}, {file_name}')
 
         df = CSV(file_name=file_name, max_sample_freq=1e9, **self.channel_mapper).df
         df = self.filter(df)
@@ -95,10 +95,12 @@ class Pipe:
         h_z_prim_rec = h_v_rec / h_i_prim
         h_z_sec_rec = h_v_rec / h_v_sec
 
-        out = key_dict
-
         # populate some results
         rec = dict(
+            # identifying information for this row
+            pipe=self.pipe,
+            pos=pos,
+
             # the "impedence" of secondary with respect to primary
             prim_sec_amp=h_z_prim_sec.amplitudes[0],
             prim_sec_phi=h_z_prim_sec.phases[0],
@@ -115,8 +117,7 @@ class Pipe:
             sec_harm_db=10 * np.log10(h_v_sec.amplitudes[1] ** 2 / np.sum(h_v_sec.amplitudes ** 2)),
             rec_harm_db=10 * np.log10(h_v_rec.amplitudes[1] ** 2 / np.sum(h_v_rec.amplitudes ** 2)),
         )
-        out.update(rec)
-        return out
+        return rec
 
     def process(self, indexed=False):
         """
@@ -154,20 +155,22 @@ class Pipe:
         # initialize a list to hold futures
         future_list = []
 
-        key_names = [c for c in self.df_log.columns if c != 'file_name']
-        for _, row in self.df_log.iterrows():
-            file_name = row['file_name']
-            key_dict = {k: row[k] for k in key_names}
+        # loop over all files for this pipe and process them
+        for pos, file_name in zip(self.df_log.pos, self.df_log.file_name):
+            # add path to file_name if needed
+            if self.data_dir is not None:
+                file_name = os.path.join(self.data_dir, file_name)
 
             # create a future (this directly evalutes the function if n_jobs < 2)
-            future = delay_func(self._process_file)(file_name, key_dict)
+            future = delay_func(self._process_file)(pos, file_name)
             future_list.append(future)
-
         # evaluate all futures (if n_jobs < 2), this just puts results into the rec_list
         rec_list = list(compute_func(*future_list, get=dask.multiprocessing.get))
 
         # specify proper column ordering for output
-        columns = list(key_dict.keys()) + [
+        columns = [
+            'pipe',
+            'pos',
             'prim_sec_amp',
             'prim_sec_phi',
             'prim_rec_amp',
